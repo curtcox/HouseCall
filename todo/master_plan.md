@@ -124,11 +124,61 @@ Rationale:
 
 ### 2.5 Voice / Telephony
 
-**Placeholder — see Open Questions**
+**Twilio** (telephony transport) + **ElevenLabs** (conversational AI voice agent)
 
-The use cases describe phone calls as the primary interaction channel. The telephony integration is a major architectural decision that needs further discussion.
+Architecture:
+- **Twilio** handles the telephone network: inbound/outbound calls, call routing, call status webhooks, phone number provisioning
+- **ElevenLabs Conversational AI** provides the voice agent that conducts natural intake interviews, followup calls, and information gathering
+- The ElevenLabs agent connects to Twilio via SIP trunking or Twilio Media Streams
+- The HouseCall backend orchestrates both: it tells Twilio when to place calls and provides ElevenLabs with case context and conversation goals
 
-### 2.6 Testing Stack
+Rationale:
+- Twilio is the most mature telephony API with the best testing tools (Twilio CLI, test credentials, call recording)
+- ElevenLabs provides natural-sounding voice with low latency, and their Conversational AI product supports structured data extraction from conversations — exactly what the intake engine needs
+- Separation of telephony transport (Twilio) from voice intelligence (ElevenLabs) allows swapping either independently
+
+### 2.6 Conversational AI & Domain Knowledge
+
+**LLM-powered** — the service uses large language models for:
+- Conducting natural intake interviews via ElevenLabs voice agent
+- Domain-specific triage and assessment (medical symptoms, travel logistics, construction norms)
+- Pattern detection and recommendation generation
+- Emotional/social signal detection
+
+The LLM is the domain knowledge base. Rather than curating rules for every possible scenario, the service provides case context to an LLM and receives structured assessments. Deterministic rules (escalation thresholds, scheduling bounds) still enforce hard constraints — the LLM advises within those guardrails.
+
+**Testing implications:**
+- Domain logic has two layers: deterministic rules (tested via unit/property tests) and LLM-assessed recommendations (tested via human + AI review)
+- LLM responses must be validated against the deterministic guardrails (e.g., an LLM cannot recommend skipping an escalation that meets hard criteria)
+- Conversational quality is evaluated by both human reviewers and AI-based evaluation (LLM-as-judge)
+
+### 2.7 Authentication & Subscription
+
+**Clerk**
+
+- Handles user authentication (sign-up, sign-in, session management)
+- Gates subscription access — users subscribe through Clerk-integrated billing
+- Single-tenant architecture: one deployment, one organization, all cases share the same instance
+- Clerk webhooks notify the backend of subscription status changes
+
+### 2.9 Deployment
+
+**Cloudflare**
+
+The service deploys on Cloudflare's platform. See OQ-F-001 below for specific product selection.
+
+### 2.10 Notification Channels
+
+All notification channels are supported behind a **NotificationAdapter** abstraction:
+- Phone calls (Twilio)
+- SMS (Twilio)
+- Email (provider TBD — Cloudflare Email Workers, Resend, or SendGrid)
+- Push notifications (web push)
+- Slack / Teams (webhook integrations)
+
+The adapter pattern makes adding new channels a matter of implementing a single interface. Channel selection is per-party and per-case.
+
+### 2.11 Testing Stack
 
 | Layer | Tool | Purpose |
 |---|---|---|
@@ -140,7 +190,7 @@ The use cases describe phone calls as the primary interaction channel. The telep
 | Mutation Tests | **Stryker** | Verify test suite quality by mutating source code |
 | Load Tests | **k6** | Verify performance under load |
 
-### 2.7 Static Analysis & Code Quality
+### 2.12 Static Analysis & Code Quality
 
 | Tool | Purpose |
 |---|---|
@@ -155,12 +205,14 @@ The use cases describe phone calls as the primary interaction channel. The telep
 | **npm audit / Snyk** | Vulnerability scanning |
 | **OSSF Scorecard** | Supply chain security |
 
-### 2.8 Infrastructure
+### 2.13 Infrastructure
 
 | Concern | Tool |
 |---|---|
 | Containerization | **Docker** + **Docker Compose** (local dev) |
 | CI/CD | **GitHub Actions** |
+| Deployment | **Cloudflare** (specific products TBD — see OQ-F-001) |
+| Authentication | **Clerk** (user auth + subscription gating) |
 | Package Management | **pnpm** (strict, fast, disk-efficient) |
 | Monorepo Management | **Turborepo** (if multi-package) |
 | Schema Validation | **Zod** (runtime) + **TypeBox** (Fastify schemas) |
@@ -220,7 +272,7 @@ housecall/
 │   │   └── resolution/
 │   │       ├── resolution-service.ts
 │   │       └── resolution-service.test.ts
-│   ├── infrastructure/           # External concerns — database, queue, telephony
+│   ├── infrastructure/           # External concerns — database, queue, telephony, AI
 │   │   ├── database/
 │   │   │   ├── prisma/
 │   │   │   │   └── schema.prisma
@@ -232,12 +284,29 @@ housecall/
 │   │   │   ├── followup-queue.ts
 │   │   │   └── followup-queue.integration.test.ts
 │   │   ├── telephony/
-│   │   │   ├── telephony-adapter.ts    # Adapter interface
+│   │   │   ├── twilio-adapter.ts       # Twilio telephony transport
+│   │   │   ├── telephony-port.ts       # Port interface
 │   │   │   ├── mock-telephony.ts       # For testing
 │   │   │   └── telephony.integration.test.ts
-│   │   └── notifications/
-│   │       ├── notification-adapter.ts
-│   │       └── notification.integration.test.ts
+│   │   ├── voice-ai/
+│   │   │   ├── elevenlabs-adapter.ts   # ElevenLabs conversational AI
+│   │   │   ├── voice-ai-port.ts        # Port interface
+│   │   │   ├── mock-voice-ai.ts        # For testing
+│   │   │   ├── conversation-goals.ts   # Structured goals for AI conversations
+│   │   │   └── voice-ai.integration.test.ts
+│   │   ├── auth/
+│   │   │   ├── clerk-adapter.ts        # Clerk authentication
+│   │   │   └── clerk.integration.test.ts
+│   │   ├── notifications/
+│   │   │   ├── notification-port.ts    # Port interface
+│   │   │   ├── sms-adapter.ts          # Twilio SMS
+│   │   │   ├── email-adapter.ts        # Email provider
+│   │   │   ├── push-adapter.ts         # Web push
+│   │   │   ├── slack-adapter.ts        # Slack webhook
+│   │   │   └── notification.integration.test.ts
+│   │   └── handoff/
+│   │       ├── handoff-port.ts         # Port interface for professional handoffs
+│   │       └── handoff.integration.test.ts
 │   └── api/                      # HTTP layer — routes, controllers
 │       ├── routes/
 │       │   ├── case-routes.ts
@@ -687,6 +756,39 @@ These tests verify the state machine governing case progression.
 | I-TE-005 | Inbound calls are routed to the correct case handler | UC1 Variant C: parent calls back |
 | I-TE-006 | Telephony adapter failures are isolated from core business logic | Adapter pattern |
 
+### 6.17a Infrastructure — Voice AI / ElevenLabs (Integration Tests)
+
+| # | Test | Rationale |
+|---|---|---|
+| I-VA-001 | A conversation goal (structured intake questions) is sent to the voice AI and structured data is returned | ElevenLabs Conversational AI extracts structured data from natural conversation |
+| I-VA-002 | The voice AI receives case context (prior history, party names) before a followup call | No information repetition — AI is briefed before calling |
+| I-VA-003 | A conversation transcript is stored and associated with the correct case | Audit trail completeness |
+| I-VA-004 | Voice AI adapter failures are isolated from core business logic | Adapter pattern — telephony still works if AI is degraded |
+| I-VA-005 | The voice AI can be replaced with a mock that returns pre-scripted responses for deterministic testing | Testability of E2E scenarios |
+
+### 6.17b LLM Guardrail Enforcement (Unit Tests)
+
+When the LLM provides domain assessments, deterministic rules must validate and potentially override the LLM's recommendations.
+
+| # | Test | Rationale |
+|---|---|---|
+| U-LG-001 | An LLM recommendation that conflicts with a hard escalation trigger is overridden by the deterministic rule | UC7-D: LLM says "monitor" but patient reports chest pain → hard rule escalates |
+| U-LG-002 | An LLM recommendation that falls within guardrails is accepted | Normal case: LLM triage agrees with rule-based assessment |
+| U-LG-003 | A guardrail override is recorded in the audit trail with both the LLM recommendation and the rule that overrode it | Transparency for debugging and review |
+| U-LG-004 | LLM-assessed urgency is bounded to the same enum as deterministic urgency (LOW, MEDIUM, HIGH, CRITICAL) | Structured output validation |
+| U-LG-005 | An LLM response that fails to parse into the expected structured format triggers a fallback to deterministic-only assessment | Graceful degradation |
+| U-LG-006 | LLM recommendations are never executed without passing through the guardrail validation layer | Architectural invariant — no direct LLM → action path |
+
+### 6.17c Infrastructure — Clerk Auth (Integration Tests)
+
+| # | Test | Rationale |
+|---|---|---|
+| I-CK-001 | A valid Clerk session token grants access to the API | Auth happy path |
+| I-CK-002 | An expired or invalid Clerk session token returns 401 | Auth enforcement |
+| I-CK-003 | A user with an inactive subscription is rejected from creating new cases | Subscription gating |
+| I-CK-004 | A user with an active subscription can create cases | Subscription gating happy path |
+| I-CK-005 | Clerk webhook for subscription status change updates the user's access in the backend | Subscription lifecycle |
+
 ### 6.18 API / E2E Scenario Tests
 
 Each use case and its variants are tested as end-to-end scenarios. These tests simulate the full timeline described in the use cases.
@@ -1001,12 +1103,12 @@ interface Clock {
 
 | Level | Count | Sections |
 |---|---|---|
-| Unit Tests | 155 | CL(16), IT(16), FS(16), ES(16), PC(16), WS(13), AG(11), AT(6), AE(20), PD(8), RD(9), EA(7), HO(4), TZ(7), ID(5), SE(4 unit) |
+| Unit Tests | 161 | CL(16), IT(16), FS(16), ES(16), PC(16), WS(13), AG(11), AT(6), AE(20), PD(8), RD(9), EA(7), HO(4), LG(6), TZ(7), ID(5), SE(4 unit) |
 | Property Tests | 15 | CL(5), FS(5), ES(3), + 2 implicit |
-| Integration Tests | 44 | DB(13), JQ(9), TE(6), RC(6), RF(7), SE(5 integration), HO(1), AG(1), AE(1) |
+| Integration Tests | 54 | DB(13), JQ(9), TE(6), VA(5), CK(5), RC(6), RF(7), SE(5 integration), HO(1), AG(1), AE(1) |
 | E2E Scenario Tests | 60 | UC1-12 (5 each: happy path + 4 variants) |
 | Cross-Cutting Tests | 10 | CC(10) |
-| **Total** | **284** |
+| **Total** | **300** |
 
 These are the *specification* tests — the tests we know we need before writing code. Additional tests will emerge during TDD as implementation reveals edge cases.
 
@@ -1028,36 +1130,41 @@ These are the *specification* tests — the tests we know we need before writing
 
 ### Phase 2: Core Logic (Weeks 4-6)
 
-**Goal:** Triage, escalation, workstreams, and scheduling.
+**Goal:** Triage, escalation, workstreams, scheduling, and LLM guardrails.
 
 1. Intake and triage logic (with tests U-IT-*)
 2. Escalation and de-escalation engine (with tests U-ES-*)
 3. Workstream management (with tests U-WS-*)
-4. Dynamic followup scheduling (with tests U-FS-005 through U-FS-015)
-5. Property tests for all domain logic (P-CL-*, P-FS-*, P-ES-*)
+4. Dynamic followup scheduling (with tests U-FS-005 through U-FS-016)
+5. LLM guardrail enforcement layer (with tests U-LG-*)
+6. Emotional awareness logic (with tests U-EA-*)
+7. Property tests for all domain logic (P-CL-*, P-FS-*, P-ES-*)
 
 ### Phase 3: Infrastructure (Weeks 7-9)
 
 **Goal:** Database, queue, adapters — real I/O.
 
-1. PostgreSQL schema and Prisma setup
+1. PostgreSQL schema and Prisma setup (hosted via Neon or similar — see OQ-F-006)
 2. Repository implementations (with tests I-DB-*)
-3. BullMQ job queue for followups (with tests I-JQ-*)
-4. Telephony adapter interface + mock (with tests I-TE-*)
-5. Notification adapter
-6. Docker Compose for local development
-7. CI Tier 3 (main merge gate) — operational by end of phase
+3. BullMQ job queue for followups (with tests I-JQ-*) — Redis hosted via Upstash or similar (see OQ-F-007)
+4. Twilio telephony adapter (with tests I-TE-*)
+5. ElevenLabs voice AI adapter (with tests I-VA-*)
+6. Clerk auth adapter (with tests I-CK-*)
+7. Notification adapters — SMS, email, push, Slack (with tests)
+8. Docker Compose for local development
+9. CI Tier 3 (main merge gate) — operational by end of phase
 
 ### Phase 4: Application Services (Weeks 10-12)
 
 **Goal:** Use case orchestration, API, end-to-end scenarios.
 
-1. Intake service
+1. Intake service (integrating ElevenLabs for voice intake + LLM for triage)
 2. Monitoring service
 3. Coordination service
 4. Resolution service
-5. API routes
-6. First E2E scenario tests (UC1, UC10 — chosen for breadth of patterns)
+5. Handoff protocol adapters (with tests U-HO-*, I-HO-*)
+6. API routes (Clerk-protected)
+7. First E2E scenario tests (UC1, UC10 — chosen for breadth of patterns)
 
 ### Phase 5: Full Coverage (Weeks 13-16)
 
@@ -1082,24 +1189,43 @@ These are the *specification* tests — the tests we know we need before writing
 
 ---
 
-## 10. Open Questions
+## 10. Resolved Questions
 
-These must be resolved before or during implementation. Each is tagged with the phase it blocks.
+All original open questions have been answered. Decisions are recorded here for traceability.
 
-| # | Question | Blocks | Impact |
+| # | Question | Decision | Architectural Impact |
 |---|---|---|---|
-| OQ-001 | **Telephony provider:** Which voice/telephony service will be used? (Twilio, Vonage, custom SIP, LLM-based voice agent?) The use cases describe natural phone conversations with intake interviews — this implies conversational AI, not just automated calls. | Phase 3 | Affects telephony adapter design, cost model, and the entire conversational intake engine |
-| OQ-002 | **Conversational AI:** How are the intake interviews conducted? Is there an LLM powering the phone conversations? If so, which one, and how is it integrated? | Phase 2 | Core to the service — this is the primary user interface |
-| OQ-003 | **Domain knowledge base:** The service needs domain-specific knowledge (medical symptoms, travel procedures, construction norms). Is this LLM-powered, rules-based, or a curated knowledge base? | Phase 2 | Affects triage logic, escalation rules, and recommendations |
-| OQ-004 | **Multi-tenancy:** Is this a single-tenant service (one organization) or multi-tenant (many users, many organizations)? | Phase 1 | Affects database schema, authentication, and data isolation |
-| OQ-005 | **Authentication & authorization:** How do users authenticate? How are party permissions managed? Is there an API key model, OAuth, or something else? | Phase 3 | Affects API design and security model |
-| OQ-006 | **Third-party integrations:** The use cases mention contacting plumbers, airlines, insurance companies. Is this done via phone (through the telephony system), via APIs, or is it a manual action that the service tracks? | Phase 4 | Affects action execution architecture |
-| OQ-007 | **Dashboard technology:** UC2 mentions a real-time status dashboard. Is this a web UI? What frontend framework? Or is it a third-party tool integration? | Phase 4 | Affects artifact generation and adds a frontend workstream |
-| OQ-008 | **Data retention & privacy:** How long is case data retained? Are there HIPAA implications for medical use cases? GDPR for international users? | Phase 3 | Affects database design, audit trail, and data lifecycle |
-| OQ-009 | **Deployment target:** Where will this run? AWS, GCP, Azure, self-hosted? Kubernetes, ECS, bare EC2? | Phase 6 | Affects CI/CD, Docker configuration, and infrastructure-as-code |
-| OQ-010 | **Cost model:** Is this a SaaS with per-case pricing, a subscription, or an internal tool? | Phase 5 | Affects multi-tenancy, metering, and reporting |
-| OQ-011 | **Offline/degraded mode:** What happens if Redis is down? If PostgreSQL is unavailable? What's the durability guarantee for in-flight followups? | Phase 3 | Affects queue design and failure handling |
-| OQ-012 | **Rate of scale:** How many concurrent cases should the system support? 10? 1,000? 100,000? | Phase 3 | Affects database indexing, queue partitioning, and load test targets |
-| OQ-013 | **Notification channels:** Beyond phone calls, which channels are supported? SMS? Email? Push notifications? Slack/Teams? | Phase 4 | Affects notification adapter design |
-| OQ-014 | **Testing the conversational AI:** If the intake is LLM-powered, how do we test conversation quality? What is the acceptance criteria for a "good" intake interview? | Phase 2 | Affects the entire testing strategy for the intake engine |
-| OQ-015 | **Handoff protocol:** When the service hands off to a professional (nurse line, counselor), what does that look like technically? A warm transfer? A summary sent to the professional? | Phase 4 | Affects third-party communication design |
+| OQ-001 | Telephony provider | **Twilio** | Twilio SDK for call management, webhooks for call status, test credentials for integration tests |
+| OQ-002 | Conversational AI | **ElevenLabs** (best available) | ElevenLabs Conversational AI agent conducts phone interviews. Connected to Twilio via Media Streams or SIP. Requires structured conversation goals per case context |
+| OQ-003 | Domain knowledge base | **LLM-powered** | LLM provides domain expertise (medical, travel, construction). Deterministic rules enforce hard constraints (escalation thresholds, scheduling bounds). LLM advises within guardrails |
+| OQ-004 | Multi-tenancy | **Single-tenant** | Simpler schema — no tenant isolation columns. Single deployment instance. All cases share one database |
+| OQ-005 | Authentication | **Clerk** | Clerk handles sign-up, sign-in, session management. Integrates with Fastify via middleware |
+| OQ-006 | Third-party integrations | **Multiple mechanisms** — service determines the appropriate method per situation | Requires an `ActionExecutor` abstraction with strategy pattern: phone (via Twilio/ElevenLabs), API (for services with APIs), web search (for finding services), manual tracking (for actions the user takes themselves) |
+| OQ-007 | Dashboard technology | **Varies case by case** | Dashboards are generated artifacts, not a fixed frontend app. Could be a shared web link, an emailed summary, a Slack channel, etc. The artifact type is selected per case needs |
+| OQ-008 | Data retention | **Indefinite retention** | No data lifecycle management needed for now. Simplifies architecture. May revisit if regulatory requirements emerge |
+| OQ-009 | Deployment target | **Cloudflare** | Deployment platform is Cloudflare. Specific product selection (Workers, Workers + Durable Objects, VMs) depends on follow-up questions below |
+| OQ-010 | Cost model | **Subscription gated by Clerk** | Clerk manages subscription status. Backend checks subscription before allowing case creation. No per-case metering needed |
+| OQ-011 | Offline/degraded mode | **Eventual delivery, no SLA** | Favor durability over speed. If Redis is down, jobs wait. If DB is down, writes queue until recovery. No hard latency guarantees. Simplifies queue design significantly |
+| OQ-012 | Scale target | **100 concurrent cases** | Modest scale. Single PostgreSQL instance is sufficient. No need for queue partitioning, sharding, or read replicas. Load tests target 100 concurrent cases |
+| OQ-013 | Notification channels | **All (phone, SMS, email, push, Slack/Teams)** — natural abstraction point | `NotificationPort` interface with per-channel adapters. Adding a new channel = implementing one interface. Channel selection is per-party |
+| OQ-014 | Testing conversational AI | **Both human and AI reviewers** | Two-layer evaluation: (1) AI-as-judge evaluates conversation transcripts against structured rubrics, (2) human reviewers audit a sample of conversations. Both run as part of CI (AI) and release process (human) |
+| OQ-015 | Handoff protocol | **Varies by profession/org** — natural abstraction point | `HandoffPort` interface with per-target adapters. Some handoffs are warm phone transfers (Twilio conference), some are document packages (fax, secure email), some are API integrations. Adding a new handoff type = implementing one interface |
+
+---
+
+## 11. Follow-Up Questions
+
+These new questions emerged from the resolved answers above.
+
+| # | Question | Blocks | Context |
+|---|---|---|---|
+| OQ-F-001 | **Cloudflare product selection:** Which Cloudflare products specifically? Workers (serverless, 30s CPU limit) vs. Workers + Durable Objects (stateful, WebSocket) vs. Cloudflare VMs (traditional containers)? Workers have constraints on execution time, WebSockets, and persistent connections that directly affect the Twilio/ElevenLabs integration. A voice call that lasts 20 minutes cannot be managed by a Worker with a 30-second CPU limit. | Phase 3 | Twilio webhooks are stateless and work with Workers. But ElevenLabs Conversational AI may require persistent WebSocket connections during calls, which needs Durable Objects or VMs |
+| OQ-F-002 | **ElevenLabs product specifics:** Which ElevenLabs product — Conversational AI (their agent product) or Speech-to-Speech + TTS used with a separate LLM? If Conversational AI, are we using their hosted agent or self-hosting the orchestration with their voice as the transport? | Phase 2 | Affects whether the "intelligence" lives in ElevenLabs or in our backend. If their agent product handles the conversation, our backend provides goals and receives structured results. If we orchestrate, we need our own LLM integration alongside ElevenLabs voice |
+| OQ-F-003 | **Which LLM for domain intelligence?** The domain knowledge is LLM-powered — which LLM? Claude (Anthropic), GPT (OpenAI), or Gemini (Google)? This affects: API integration, cost per case, context window constraints for long cases, and prompt engineering approach | Phase 2 | A case with 30+ days of followup history could have a large context. The LLM must handle long context for triage re-assessment |
+| OQ-F-004 | **LLM guardrail enforcement:** When the LLM recommends an action, how is it validated against the deterministic rules before execution? Is this a separate validation step, or are the rules embedded in the LLM prompt as constraints? | Phase 2 | Example: LLM says "this seems fine, check back in a week" but the patient reported chest pain, which is a hard escalation trigger. The deterministic rule must override the LLM |
+| OQ-F-005 | **Clerk subscription tier:** Does the subscription have tiers (e.g., basic = 5 cases/month, pro = unlimited)? Or is it a single flat subscription? | Phase 4 | Affects whether we need case counting, feature gating, or usage metering |
+| OQ-F-006 | **PostgreSQL hosting on Cloudflare:** Cloudflare doesn't natively offer managed PostgreSQL. Options: (a) Neon (serverless PostgreSQL, Cloudflare partner), (b) Supabase, (c) external managed PostgreSQL (e.g., AWS RDS) accessed from Cloudflare Workers via Hyperdrive. Which approach? | Phase 3 | Neon + Cloudflare Hyperdrive is the most natural pairing. But if using Cloudflare VMs, any PostgreSQL host works |
+| OQ-F-007 | **Redis hosting on Cloudflare:** Similar to PostgreSQL — BullMQ needs Redis. Options: (a) Upstash (serverless Redis, Cloudflare partner), (b) external Redis (e.g., Redis Cloud), (c) replace BullMQ with Cloudflare Queues (native) or Durable Objects for scheduling. Which approach? | Phase 3 | Cloudflare Queues are simpler but less feature-rich than BullMQ. Durable Objects could replace both Redis and BullMQ for scheduling at the cost of more custom code |
+| OQ-F-008 | **Email provider:** For email notifications, which provider? Options that integrate well with Cloudflare: (a) Cloudflare Email Workers, (b) Resend, (c) SendGrid (Twilio-owned, convenient since Twilio is already in the stack) | Phase 4 | SendGrid has the advantage of consolidated billing with Twilio |
+| OQ-F-009 | **Conversation transcript storage:** Where are ElevenLabs conversation transcripts stored? In our PostgreSQL database (as JSONB on the case), in blob storage (Cloudflare R2), or in ElevenLabs' own storage with references? | Phase 3 | Affects audit trail completeness, data retention, and the handoff context package |
+| OQ-F-010 | **AI-as-judge evaluation model:** Which LLM evaluates conversation quality in CI? Same model as the domain LLM, or a different one? Using the same model creates circular evaluation risks | Phase 2 | Best practice: use a different model family for evaluation than for generation, to avoid blind spots |
