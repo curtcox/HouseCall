@@ -798,9 +798,158 @@ These test behaviors that span multiple use cases.
 | E2E-CC-009 | A party opting out of a case does not affect other parties in the same case | Partial opt-out |
 | E2E-CC-010 | System handles 100+ active cases simultaneously without degradation | Load baseline |
 
+### 6.20 Time Zone & Scheduling Edge Cases (Unit Tests)
+
+UC5 (international travel) explicitly involves multiple time zones. UC1 involves middle-of-night calls. UC2 involves around-the-clock shifts. Correct time handling is critical.
+
+| # | Test | Rationale |
+|---|---|---|
+| U-TZ-001 | FollowUp scheduled at 7:00 AM respects the party's local time zone | UC1: morning followup at parent's local 7 AM |
+| U-TZ-002 | A case spanning multiple time zones stores all times in UTC internally | Canonical storage |
+| U-TZ-003 | Display times are converted to the viewing party's time zone | UC2: boss in central office, team on-site |
+| U-TZ-004 | DST transitions do not skip or duplicate followups | Spring forward / fall back |
+| U-TZ-005 | A party whose time zone changes mid-case (e.g., traveler) gets followups at the new local time | UC5: traveler moves between time zones |
+| U-TZ-006 | Scheduling a followup "24 hours from now" vs. "same time tomorrow" produces different results across DST | Precision vs. human expectation |
+| U-TZ-007 | A followup at "end of business day" resolves correctly per the party's local time zone | Business hours awareness |
+
+### 6.21 Idempotency & Duplicate Handling (Unit Tests)
+
+Network unreliability means actions may be delivered or triggered more than once. The system must handle this gracefully.
+
+| # | Test | Rationale |
+|---|---|---|
+| U-ID-001 | Processing the same followup job twice does not create duplicate audit entries | At-least-once delivery safety |
+| U-ID-002 | Processing the same followup job twice does not trigger duplicate notifications | Prevent spam |
+| U-ID-003 | Receiving the same webhook event twice does not create duplicate state transitions | Webhook replay safety |
+| U-ID-004 | Creating a case with the same idempotency key returns the existing case, not a new one | Retry-safe case creation |
+| U-ID-005 | An action marked as completed cannot be re-executed by a duplicate trigger | Action finality |
+
+### 6.22 Concurrency & Race Conditions (Integration Tests)
+
+Multiple parties, parallel workstreams, and concurrent followups create real concurrency challenges.
+
+| # | Test | Rationale |
+|---|---|---|
+| I-RC-001 | Two followups completing simultaneously for the same case both record their results correctly | No lost updates |
+| I-RC-002 | A case state transition and a concurrent followup completion are serialized correctly | State consistency |
+| I-RC-003 | Two parties updating case context simultaneously do not lose either update | Concurrent modification safety |
+| I-RC-004 | An escalation triggered while a de-escalation is in progress resolves to the escalated state | Escalation wins |
+| I-RC-005 | Concurrent workstream completions correctly trigger resolution check exactly once | No duplicate resolution |
+| I-RC-006 | A followup being rescheduled while it is being processed resolves deterministically | Schedule/execute race |
+
+### 6.23 System Resilience & Failure Modes (Integration Tests)
+
+| # | Test | Rationale |
+|---|---|---|
+| I-RF-001 | If the database is temporarily unavailable, in-flight followup jobs are retried | Transient failure recovery |
+| I-RF-002 | If Redis is temporarily unavailable, no followup data is permanently lost | Queue durability |
+| I-RF-003 | If a telephony call fails, the failure is recorded and an alternative contact method is attempted | Communication resilience |
+| I-RF-004 | A partially completed multi-step action (e.g., notify 3 parties, 1 fails) records partial success and retries the failed step | Partial failure handling |
+| I-RF-005 | A case that has no successful contact with any party for 7 days is flagged for human review | Staleness detection |
+| I-RF-006 | Recovery after system restart picks up all pending followups without duplication | Crash recovery |
+| I-RF-007 | If artifact generation fails, the failure is logged but does not block case progression | Non-critical failure isolation |
+
+### 6.24 Security & Authorization (Unit + Integration Tests)
+
+| # | Test | Rationale |
+|---|---|---|
+| U-SE-001 | A party can only view cases they are associated with | Data isolation |
+| U-SE-002 | A party's information boundary is enforced on all API responses | No leakage |
+| U-SE-003 | Audit trail entries cannot be modified or deleted via any API | Immutability enforcement |
+| U-SE-004 | Case context containing PII is not included in error messages or logs | PII protection |
+| I-SE-005 | API requests without valid authentication are rejected with 401 | Auth enforcement |
+| I-SE-006 | API requests for cases the authenticated user is not party to are rejected with 403 | Authorization enforcement |
+| I-SE-007 | Rate limiting prevents excessive API calls from a single client | Abuse prevention |
+| I-SE-008 | SQL injection via case context fields is prevented | Input sanitization |
+| I-SE-009 | XSS via case context fields rendered in dashboards is prevented | Output encoding |
+
 ---
 
-## 7. Implementation Phases
+## 7. Architecture Notes
+
+### 7.1 Event-Driven Core
+
+The use cases reveal that HouseCall is fundamentally **event-driven**, not request-response. The primary interaction pattern is:
+
+1. An event occurs (user calls, time elapses, third party responds)
+2. The system processes the event against the current case state
+3. The system decides on zero or more actions (call someone, schedule followup, escalate)
+4. The system executes those actions, which may produce new events
+
+This suggests a **domain event** pattern at the core:
+
+```
+Event → Command Handler → Domain Logic → [Events] → Side Effects
+```
+
+Key domain events:
+- `CaseCreated`, `CaseTriaged`, `CaseEscalated`, `CaseDeescalated`, `CaseResolved`, `CaseClosed`
+- `FollowUpScheduled`, `FollowUpCompleted`, `FollowUpMissed`, `FollowUpRescheduled`
+- `PartyContacted`, `PartyUnreachable`, `PartyOptedOut`
+- `WorkstreamCreated`, `WorkstreamBlocked`, `WorkstreamCompleted`
+- `ActionRequested`, `ActionSucceeded`, `ActionFailed`
+- `EscalationTriggered`, `DeescalationTriggered`
+- `ArtifactGenerated`
+- `PatternDetected`
+
+### 7.2 Hexagonal Architecture
+
+The domain logic must be completely isolated from infrastructure concerns:
+
+```
+                    ┌──────────────────────────────┐
+                    │        Domain Layer           │
+   API ────────────►│  Cases, Parties, Workstreams  │◄──────── Telephony
+   Adapter          │  FollowUps, Escalations       │          Adapter
+                    │  (Pure logic, no I/O)          │
+   Webhook ────────►│                               │◄──────── Notification
+   Adapter          └───────────┬──────────────────┘          Adapter
+                                │
+                    ┌───────────▼──────────────────┐
+                    │     Infrastructure Layer      │
+                    │  PostgreSQL, Redis/BullMQ     │
+                    │  Telephony API, Email/SMS     │
+                    └──────────────────────────────┘
+```
+
+This architecture enables:
+- **Unit tests** run against the domain layer with no infrastructure
+- **Integration tests** swap in real infrastructure via Testcontainers
+- **Telephony/notification adapters** can be mocked, stubbed, or swapped without touching domain logic
+
+### 7.3 Time as a First-Class Concept
+
+Many tests and features depend on the passage of time (followup schedules, DST, time zones, "48 hours of no contact"). The system must use an injectable `Clock` abstraction:
+
+```typescript
+interface Clock {
+  now(): DateTime;
+  timezone(partyId: PartyId): Timezone;
+}
+```
+
+- Production: real system clock
+- Tests: controllable fake clock that can be advanced programmatically
+- This enables deterministic testing of all time-dependent behavior without `setTimeout` or flaky waits
+
+---
+
+## 8. Updated Test Count Summary
+
+| Level | Count | Sections |
+|---|---|---|
+| Unit Tests | 116 | CL(15), IT(14), FS(15), ES(15), PC(14), WS(10), AG(8), AT(6), AE(8), PD(5), RD(7), TZ(7), ID(5), SE(4 unit) |
+| Property Tests | 15 | CL(5), FS(5), ES(3), + 2 implicit |
+| Integration Tests | 40 | DB(13), JQ(9), TE(6), RC(6), RF(7), SE(5 integration) |
+| E2E Scenario Tests | 60 | UC1-12 (5 each: happy path + 4 variants) |
+| Cross-Cutting Tests | 10 | CC(10) |
+| **Total** | **241** |
+
+These are the *specification* tests — the tests we know we need before writing code. Additional tests will emerge during TDD as implementation reveals edge cases.
+
+---
+
+## 9. Implementation Phases
 
 ### Phase 1: Foundation (Weeks 1-3)
 
@@ -870,22 +1019,7 @@ These test behaviors that span multiple use cases.
 
 ---
 
-## 8. Test Count Summary
-
-| Level | Count |
-|---|---|
-| Unit Tests | 96 |
-| Property Tests | 15 |
-| Integration Tests | 28 |
-| E2E Scenario Tests | 62 |
-| Cross-Cutting Tests | 10 |
-| **Total** | **211** |
-
-These are the *specification* tests — the tests we know we need before writing code. Additional tests will emerge during TDD as implementation reveals edge cases.
-
----
-
-## 9. Open Questions
+## 10. Open Questions
 
 These must be resolved before or during implementation. Each is tagged with the phase it blocks.
 
