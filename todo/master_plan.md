@@ -433,6 +433,7 @@ These tests verify the state machine governing case progression.
 | U-CL-013 | A case in ACTIVE can transition to TRIAGE (re-triage on scope change) | UC2 Variant C: scope change mid-recovery |
 | U-CL-014 | A case stores the reason for each state transition | Audit trail |
 | U-CL-015 | Multiple rapid state transitions are recorded in order | Consistency under rapid updates |
+| U-CL-016 | A case in ACTIVE can enter a STANDBY sub-state where scheduled followups are suspended but the case remains open and responsive to inbound contact | UC9-A: weather clears, service stands down but remains available |
 
 ### 6.2 Case Lifecycle (Property Tests)
 
@@ -462,6 +463,8 @@ These tests verify the state machine governing case progression.
 | U-IT-012 | Triage detects time-critical constraints and flags them | UC10: daycare closes at 6 PM |
 | U-IT-013 | Intake rejects creation of a case with no descriptive context | Guard against empty cases |
 | U-IT-014 | Triage can be re-run if new information changes the assessment | UC1 Variant C: symptoms worsen |
+| U-IT-015 | Triage output includes a description of the next scheduled action(s) communicated to the initiator | UC1: "I will call you back at 7:00 AM" — setting expectations |
+| U-IT-016 | Triage can cross-reference user-provided data against domain-specific reference data (e.g., toxicity thresholds) to inform urgency | UC12: amount ingested vs. dog weight |
 
 ### 6.4 FollowUp Scheduling (Unit Tests)
 
@@ -482,6 +485,7 @@ These tests verify the state machine governing case progression.
 | U-FS-013 | The maximum followup frequency is bounded (no more than once per 15 minutes) | Prevent runaway scheduling |
 | U-FS-014 | The minimum followup frequency for an active case is bounded (at least once per 7 days) | Prevent forgotten cases |
 | U-FS-015 | Dynamic rescheduling preserves the history of previous schedule | Audit trail for why timing changed |
+| U-FS-016 | A followup execution context includes a summary of all prior followup outcomes for the case | Pattern 3+10: user never repeats info |
 
 ### 6.5 FollowUp Scheduling (Property Tests)
 
@@ -512,6 +516,7 @@ These tests verify the state machine governing case progression.
 | U-ES-013 | De-escalation cannot reduce urgency below LOW | Floor on urgency |
 | U-ES-014 | Escalation above CRITICAL is not possible (CRITICAL is the ceiling) | Ceiling on urgency |
 | U-ES-015 | Escalation criteria can include time-based triggers (e.g., no response in 48h) | UC6 Variant C: contractor goes silent |
+| U-ES-016 | Escalation target is resolved dynamically based on urgency level and domain context (e.g., CRITICAL medical → emergency services, not regular doctor) | UC1-C vs. UC7-D: different escalation targets |
 
 ### 6.7 Escalation (Property Tests)
 
@@ -539,6 +544,8 @@ These tests verify the state machine governing case progression.
 | U-PC-012 | A party can opt out of further contact | UC3 Variant D: parent refuses help |
 | U-PC-013 | When a party opts out, the initiator is notified | UC3 Variant D |
 | U-PC-014 | Information summaries are tailored to the party's role | UC2: team gets priorities, boss gets progress |
+| U-PC-015 | The service can create a "decision request" artifact sent to one party containing input from another, with tracking until resolved | UC6-B: homeowner/contractor budget discussion, UC8-D: candidate concerns |
+| U-PC-016 | A third party can be onboarded to a case with authorization from the initiator, including introductory contact explaining the service's role | UC6: contractor onboarding |
 
 ### 6.9 Workstream Management (Unit Tests)
 
@@ -554,6 +561,9 @@ These tests verify the state machine governing case progression.
 | U-WS-008 | Workstreams can have dependencies on each other | UC5: can't adjust hotel until flight is rebooked |
 | U-WS-009 | A workstream can be created mid-case (not just at intake) | UC4 Variant D: mold found during repair |
 | U-WS-010 | Workstream status changes are recorded as AuditEntries | Audit trail |
+| U-WS-011 | Completing a workstream triggers evaluation of dependent workstreams (e.g., standing down a parallel workstream that is no longer needed) | UC10-A: daycare backup stood down when car fixed |
+| U-WS-012 | A workstream can be stood down (canceled as no longer needed) with a reason, and affected parties are notified | UC10-A: backup person notified they're not needed |
+| U-WS-013 | When all alternatives in a workstream are exhausted, the service reprioritizes workstreams (user handles time-critical one, service handles the other) | UC10-B: driver goes to daycare, service handles car |
 
 ### 6.10 Artifact Generation (Unit Tests)
 
@@ -567,6 +577,9 @@ These tests verify the state machine governing case progression.
 | U-AG-006 | An artifact can be scoped to a specific audience/party | UC2: boss dashboard vs. team view |
 | U-AG-007 | A summary respects information boundaries | Doesn't leak restricted info |
 | U-AG-008 | A post-resolution final summary is generated on case close | UC9: thank-you summary |
+| U-AG-009 | A periodic summary artifact aggregates data from multiple followups over a date range, formatted for a specific party role | UC7: pre-appointment summary from daily check-ins for doctor |
+| U-AG-010 | A dashboard artifact tracks which parties have access and enforces access controls | UC2: boss and team have different dashboard views |
+| U-AG-011 | The service can generate a "decision support" artifact presenting multiple options with stated consequences, without recommending a choice | UC11: options for academic recovery with financial aid implications |
 
 ### 6.11 Audit Trail (Unit Tests)
 
@@ -591,6 +604,18 @@ These tests verify the state machine governing case progression.
 | U-AE-006 | Actions are recorded in the audit trail | Accountability |
 | U-AE-007 | An action can spawn a new followup | After calling plumber, follow up to confirm arrival |
 | U-AE-008 | Concurrent actions on different workstreams execute independently | UC10: car tow + daycare call in parallel |
+| U-AE-009 | The service generates proactive action recommendations based on domain knowledge when waiting would cause deterioration | UC4-B: "shut off water main", "file insurance claim now" |
+| U-AE-010 | A logistics action follows: search options → present to user with tradeoffs → confirm selection → book → verify | UC5: hotel booking, UC10: rental car |
+| U-AE-011 | An escalation to urgent medical evaluation includes an action to offer transportation arrangement (ride service to ambulance based on urgency) | UC3-B: arrange transport for elderly parent |
+| U-AE-012 | The service can deliver step-by-step interactive guidance (a guided procedure), tracking completion of each step | UC4-B: walking homeowner through locating shutoff valve |
+| U-AE-013 | The service creates timestamped damage documentation records when acting on behalf of a user, associated with third-party contact actions | UC4-C: documenting water damage for landlord |
+| U-AE-014 | The service monitors an external condition and automatically initiates a pre-approved action when conditions change | UC5-B: "proactively rebooks as soon as flights resume" |
+| U-AE-015 | The service can initiate an external claim filing (luggage, insurance, warranty) on behalf of a user, tracking claim status as a workstream | UC5-C: lost luggage, UC10-D: insurance claim |
+| U-AE-016 | The service sends proactive status updates to parties in a "waiting" state at configurable intervals to maintain engagement | UC8: keeping candidates engaged during hiring process |
+| U-AE-017 | The service can create a set of conditional action plans (plan A, B, C) tied to a pending decision point | UC9: three scenarios for weather decision |
+| U-AE-018 | When a decision is made at the decision point, the selected action plan is executed and others are discarded | UC9: coordinator decides to move indoors |
+| U-AE-019 | The service can execute an information-research action: gather relevant policy/procedural info from external sources, present structured findings | UC11: researching university academic policies |
+| U-AE-020 | When a user indicates a financial barrier, the service presents alternative financial options (payment plans, credit, assistance) without overriding their decision | UC12-C: pet owner can't afford emergency vet |
 
 ### 6.13 Pattern Detection (Unit Tests)
 
@@ -601,6 +626,9 @@ These tests verify the state machine governing case progression.
 | U-PD-003 | Symptom trajectory analysis detects worsening trend | UC1 Variant C, UC7 Variant B |
 | U-PD-004 | Contact failure pattern detection (repeated unreachable) | UC6 Variant C |
 | U-PD-005 | Pattern detection threshold is configurable per domain | Different sensitivity for medical vs. budget |
+| U-PD-006 | The service detects inconsistencies between a party's self-report and objective indicators, flagging for escalation review | UC3-A: parent says "fine" but speech is slower, mentions dizziness |
+| U-PD-007 | When a compliance failure is detected (missed medication, missed appointment), the service generates domain-appropriate adherence recommendations | UC7-C: pill organizer, phone alarms, visible placement |
+| U-PD-008 | The service detects disengagement signals (delayed responses, reduced enthusiasm) in a tracked party and alerts the initiator | UC8: flagging when top candidate might be losing interest |
 
 ### 6.14 Resolution Detection (Unit Tests)
 
@@ -613,6 +641,8 @@ These tests verify the state machine governing case progression.
 | U-RD-005 | Resolution generates a final summary artifact | UC2: archives dashboard |
 | U-RD-006 | Resolution records the resolution reason | Why this case is done |
 | U-RD-007 | A case that has been resolved can be referenced by future cases | Historical context |
+| U-RD-008 | Resolution checks that all parties requiring a final notification have been notified (e.g., declined candidates, vendors, backup contacts) | UC8: notify declined candidates |
+| U-RD-009 | The resolution phase can include a data-collection step that gathers feedback or outcomes from parties before generating the final summary | UC9: post-event attendance and feedback |
 
 ### 6.15 Infrastructure — Repository (Integration Tests)
 
@@ -798,7 +828,33 @@ These test behaviors that span multiple use cases.
 | E2E-CC-009 | A party opting out of a case does not affect other parties in the same case | Partial opt-out |
 | E2E-CC-010 | System handles 100+ active cases simultaneously without degradation | Load baseline |
 
-### 6.20 Time Zone & Scheduling Edge Cases (Unit Tests)
+### 6.20 Emotional & Social Awareness (Unit Tests)
+
+Pattern 9 is central to the service's value — it operates in high-stress situations. These tests drive out the logic for detecting and responding to emotional signals.
+
+| # | Test | Rationale |
+|---|---|---|
+| U-EA-001 | The service detects anxiety/stress signals in user input and flags the case for adjusted communication | UC1-D: parent is "clearly anxious" |
+| U-EA-002 | When anxiety is detected, the service offers additional reassurance options (nurse line, telehealth, second opinion) | UC1-D: offers telehealth connection |
+| U-EA-003 | The service adjusts communication frequency and style when emotional state is flagged | More empathetic phrasing, more detailed explanations |
+| U-EA-004 | When tension is detected between parties, the service adjusts communication cadence and content for each party independently | UC2-D: written updates for boss, priority summaries for team |
+| U-EA-005 | The service recommends professional support (medical, legal, mental health) when domain-specific signals are detected, recorded in audit trail | UC11-C: anxiety/depression signs → counseling center |
+| U-EA-006 | The service can switch a party's primary contact method from calls to written summaries when communication tension is detected | UC2-D: reducing contentious calls |
+| U-EA-007 | When a subject party opts out but safety concerns exist, the service provides the initiator with guidance on situations warranting override | UC3-D: when to override parent's wishes for safety |
+
+### 6.21 Handoff Protocol (Unit + Integration Tests)
+
+Pattern 10 includes handing off case context to external professionals. The use cases describe warm transfers, summary packages, and post-handoff followup.
+
+| # | Test | Rationale |
+|---|---|---|
+| U-HO-001 | A case context package can be generated for handoff to an external professional, containing relevant history and current state | UC1-D: telehealth handoff context |
+| U-HO-002 | After handoff, the service records the handoff event and schedules a post-handoff followup | UC1-D: resume standard followup after telehealth |
+| U-HO-003 | A warm handoff maintains the service's connection during the transition to the external party | UC1-D: "stays on the line to help coordinate" |
+| U-HO-004 | A followup interaction template includes context from all prior interactions, preventing redundant questioning | Pattern 10: "never ask the user to repeat information" |
+| I-HO-005 | A handoff context package is transmittable to an external system and the transmission is recorded | Integration with external professional systems |
+
+### 6.22 Time Zone & Scheduling Edge Cases (Unit Tests)
 
 UC5 (international travel) explicitly involves multiple time zones. UC1 involves middle-of-night calls. UC2 involves around-the-clock shifts. Correct time handling is critical.
 
@@ -812,7 +868,7 @@ UC5 (international travel) explicitly involves multiple time zones. UC1 involves
 | U-TZ-006 | Scheduling a followup "24 hours from now" vs. "same time tomorrow" produces different results across DST | Precision vs. human expectation |
 | U-TZ-007 | A followup at "end of business day" resolves correctly per the party's local time zone | Business hours awareness |
 
-### 6.21 Idempotency & Duplicate Handling (Unit Tests)
+### 6.23 Idempotency & Duplicate Handling (Unit Tests)
 
 Network unreliability means actions may be delivered or triggered more than once. The system must handle this gracefully.
 
@@ -824,7 +880,7 @@ Network unreliability means actions may be delivered or triggered more than once
 | U-ID-004 | Creating a case with the same idempotency key returns the existing case, not a new one | Retry-safe case creation |
 | U-ID-005 | An action marked as completed cannot be re-executed by a duplicate trigger | Action finality |
 
-### 6.22 Concurrency & Race Conditions (Integration Tests)
+### 6.24 Concurrency & Race Conditions (Integration Tests)
 
 Multiple parties, parallel workstreams, and concurrent followups create real concurrency challenges.
 
@@ -837,7 +893,7 @@ Multiple parties, parallel workstreams, and concurrent followups create real con
 | I-RC-005 | Concurrent workstream completions correctly trigger resolution check exactly once | No duplicate resolution |
 | I-RC-006 | A followup being rescheduled while it is being processed resolves deterministically | Schedule/execute race |
 
-### 6.23 System Resilience & Failure Modes (Integration Tests)
+### 6.25 System Resilience & Failure Modes (Integration Tests)
 
 | # | Test | Rationale |
 |---|---|---|
@@ -849,7 +905,7 @@ Multiple parties, parallel workstreams, and concurrent followups create real con
 | I-RF-006 | Recovery after system restart picks up all pending followups without duplication | Crash recovery |
 | I-RF-007 | If artifact generation fails, the failure is logged but does not block case progression | Non-critical failure isolation |
 
-### 6.24 Security & Authorization (Unit + Integration Tests)
+### 6.26 Security & Authorization (Unit + Integration Tests)
 
 | # | Test | Rationale |
 |---|---|---|
@@ -862,6 +918,13 @@ Multiple parties, parallel workstreams, and concurrent followups create real con
 | I-SE-007 | Rate limiting prevents excessive API calls from a single client | Abuse prevention |
 | I-SE-008 | SQL injection via case context fields is prevented | Input sanitization |
 | I-SE-009 | XSS via case context fields rendered in dashboards is prevented | Output encoding |
+
+### 6.27 Infrastructure — Artifacts & Bulk Actions (Integration Tests)
+
+| # | Test | Rationale |
+|---|---|---|
+| I-AG-001 | Updating a case triggers an update to any associated live artifact (dashboard), and the update is persisted and retrievable | UC2: dashboard updated every 2 hours |
+| I-AE-001 | A bulk notification action can notify 100+ parties through their preferred channels, with delivery tracking and failure handling per recipient | UC9: notifying vendors, volunteers, and attendees |
 
 ---
 
@@ -938,12 +1001,12 @@ interface Clock {
 
 | Level | Count | Sections |
 |---|---|---|
-| Unit Tests | 116 | CL(15), IT(14), FS(15), ES(15), PC(14), WS(10), AG(8), AT(6), AE(8), PD(5), RD(7), TZ(7), ID(5), SE(4 unit) |
+| Unit Tests | 155 | CL(16), IT(16), FS(16), ES(16), PC(16), WS(13), AG(11), AT(6), AE(20), PD(8), RD(9), EA(7), HO(4), TZ(7), ID(5), SE(4 unit) |
 | Property Tests | 15 | CL(5), FS(5), ES(3), + 2 implicit |
-| Integration Tests | 40 | DB(13), JQ(9), TE(6), RC(6), RF(7), SE(5 integration) |
+| Integration Tests | 44 | DB(13), JQ(9), TE(6), RC(6), RF(7), SE(5 integration), HO(1), AG(1), AE(1) |
 | E2E Scenario Tests | 60 | UC1-12 (5 each: happy path + 4 variants) |
 | Cross-Cutting Tests | 10 | CC(10) |
-| **Total** | **241** |
+| **Total** | **284** |
 
 These are the *specification* tests — the tests we know we need before writing code. Additional tests will emerge during TDD as implementation reveals edge cases.
 
